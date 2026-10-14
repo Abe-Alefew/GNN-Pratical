@@ -1,0 +1,60 @@
+name: CI — Tests and Gate
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Set PYTHONPATH
+        run: echo "PYTHONPATH=${{ github.workspace }}" >> $GITHUB_ENV
+
+      - name: Compile application sources
+        run: |
+          python -m compileall -q src tests
+          python -m py_compile demo.py streamlit_app.py
+
+      - name: Run tests
+        run: |
+          pytest tests/ -v --tb=short -x
+
+      - name: Run gate check (fast, tiny validation)
+        run: |
+          # Create a minimal candidate metrics file for gate testing
+          python -c "
+          import json
+          metrics = {'val_macro_f1': 0.5}
+          with open('candidate_metrics.json', 'w') as f:
+              json.dump(metrics, f)
+          "
+          # Run gate in first-model mode (no incumbent)
+          python -m src.a4_mlops.gate candidate_metrics.json
