@@ -1,0 +1,62 @@
+# Assignment 4 — MLOps Pipeline
+
+# Base model (extend from A2)
+base_model:
+  type: GCN              # GCN or GraphSAGE
+  hidden_dim: 64
+  num_layers: 2
+  dropout: 0.5
+
+# Dataset
+dataset:
+  name: Cora
+  root: ./data
+
+# Held-out nodes for inductive inference
+inductive:
+  holdout_fraction: 0.08  # fraction of nodes to exclude from training
+  holdout_seed: 42
+
+# Training
+training:
+  lr: 0.01
+  weight_decay: 5.0e-4
+  epochs: 200
+  patience: 30
+
+# MLflow experiment tracking
+mlflow:
+  experiment_name: gnn_node_classification
+  tracking_uri: ./mlruns
+
+# Model packaging
+package:
+  output_dir: ./model_packages
+
+# Validation gate
+gate:
+  metric: val_macro_f1
+  threshold_delta: 0.0    # candidate must exceed incumbent by at least this
+  tie_behavior: keep      # keep incumbent on tie (conservative)
+  min_absolute_floor: 0.3 # first-model must exceed this
+  missing_metric: block   # block if metric is absent or NaN
+
+# API serving
+api:
+  host: 0.0.0.0
+  port: 8000
+
+# Drift detection
+drift:
+  num_null_samples: 50
+  alert_quantile: 0.99
+  perturb_edge_drop: 0.4
+  perturb_feature_noise_std: 0.5
+
+# Docker
+docker:
+  image_name: gnn-mlops-api
+  tag: latest
+
+# Reproducibility
+seeds: [0, 1, 2]

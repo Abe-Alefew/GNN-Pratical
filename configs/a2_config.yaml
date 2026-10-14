@@ -1,0 +1,51 @@
+# Assignment 2 — Compare Models on Cora
+
+# Dataset
+dataset:
+  name: Cora
+  root: ./data
+
+# Model architectures
+models:
+  MLP:
+    hidden_dim: [16, 32, 64, 128]
+    dropout: [0.3, 0.5, 0.7]
+    num_layers: [2]
+  GCN:
+    hidden_dim: [16, 32, 64, 128]
+    dropout: [0.3, 0.5, 0.7]
+    num_layers: [2]
+  GraphSAGE:
+    hidden_dim: [16, 32, 64, 128]
+    dropout: [0.3, 0.5, 0.7]
+    num_layers: [2]
+    aggr: [mean, max]
+  GAT:
+    hidden_dim: [8, 16, 32]
+    dropout: [0.3, 0.5, 0.6]
+    num_layers: [2]
+    heads: [4, 8]
+
+# Hyperparameter tuning
+tuning:
+  num_trials: 20       # equal budget for each model
+  metric: val_accuracy  # selection metric
+
+# Training
+training:
+  lr_range: [0.001, 0.01]
+  weight_decay_range: [0.0, 5.0e-4]
+  epochs: 300
+  patience: 30
+
+# Depth experiment
+depth_experiment:
+  depths: [1, 2, 3, 4, 6, 8, 16]
+  hidden_dim: 64      # fixed for all depths
+
+# Edge-removal experiment
+edge_removal:
+  fractions: [0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0]
+
+# Reproducibility
+seeds: [0, 1, 2]

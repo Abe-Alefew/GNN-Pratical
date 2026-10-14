@@ -1,0 +1,47 @@
+# Assignment 3 — Link Prediction and Data Leakage
+
+# Dataset
+dataset:
+  name: Cora
+  root: ./data
+
+# Edge split ratios (on unique undirected edges)
+split:
+  train_ratio: 0.85
+  val_ratio: 0.05
+  test_ratio: 0.10
+
+# Negative sampling
+negatives:
+  val_test_ratio: 1.0   # 1:1 negatives to positives for val/test
+  train_resample: true  # resample training negatives each epoch
+
+# Encoder
+encoder:
+  type: GCN             # GCN or SAGE
+  hidden_dim: 64
+  embedding_dim: 32
+  num_layers: 2
+  dropout: 0.3
+
+# Decoders to compare
+decoders: [dot, mlp]
+
+# MLP decoder config
+mlp_decoder:
+  hidden_dim: 64
+
+# Training
+training:
+  lr: 0.01
+  weight_decay: 5.0e-4
+  epochs: 200
+  patience: 20
+  metric: val_ap        # AP or AUC for model selection
+
+# Reproducibility
+seeds: [0, 1, 2]
+
+# Candidate links
+candidates:
+  top_k: 10             # number of top-scored unobserved pairs to show
