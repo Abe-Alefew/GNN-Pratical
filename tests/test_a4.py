@@ -25,7 +25,39 @@ from src.a4_mlops.rollback import (
     register_version,
     rollback,
 )
+from src.a4_mlops.train_tracked import prepare_inductive_data
 from src.common.seed import set_seed
+from torch_geometric.data import Data
+
+
+class TestInductivePreparation:
+    """Ensure held-out nodes cannot enter the compact training graph."""
+
+    def test_excludes_nodes_and_incident_edges(self):
+        data = Data(
+            x=torch.randn(5, 3),
+            edge_index=torch.tensor(
+                [[0, 1, 1, 2, 3, 4], [1, 0, 2, 1, 4, 3]],
+                dtype=torch.long,
+            ),
+            y=torch.arange(5),
+            train_mask=torch.tensor([1, 1, 0, 0, 0], dtype=torch.bool),
+            val_mask=torch.tensor([0, 0, 1, 0, 0], dtype=torch.bool),
+            test_mask=torch.tensor([0, 0, 0, 1, 1], dtype=torch.bool),
+        )
+
+        x, edge_index, y, train_mask, val_mask, test_mask, metadata = (
+            prepare_inductive_data(data, holdout_fraction=0.4, holdout_seed=7)
+        )
+
+        assert metadata["holdout_node_ids"] == [0, 1]
+        assert metadata["heldout_nodes_in_training_graph"] is False
+        assert metadata["heldout_incident_edge_count"] == 4
+        assert x.shape[0] == y.shape[0] == 3
+        assert edge_index.tolist() == [[1, 2], [2, 1]]
+        assert train_mask.tolist() == [False, False, False]
+        assert val_mask.tolist() == [True, False, False]
+        assert test_mask.tolist() == [False, True, True]
 
 # ---------------------------------------------------------------------------
 # Model packaging tests

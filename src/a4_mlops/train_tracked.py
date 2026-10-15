@@ -10,6 +10,7 @@ Wraps the training loop with full experiment tracking:
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import matplotlib
 
@@ -25,6 +26,71 @@ from src.a4_mlops.package import save_model_package
 from src.common.config import load_config
 from src.common.data_hash import compute_dataset_hash
 from src.common.seed import set_seed
+
+
+def prepare_inductive_data(
+    data: Any,
+    holdout_fraction: float,
+    holdout_seed: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, object]]:
+    """Remove held-out nodes and incident edges before training.
+
+    The returned graph is compacted so the training tensors contain no rows or
+    edges for held-out nodes.  This makes the inductive boundary explicit
+    rather than relying only on masks over the original full graph.
+    """
+    if not 0.0 <= holdout_fraction < 1.0:
+        raise ValueError("inductive.holdout_fraction must be in [0.0, 1.0)")
+
+    num_nodes = int(data.num_nodes)
+    num_holdout = int(num_nodes * holdout_fraction)
+    if holdout_fraction > 0.0:
+        num_holdout = max(1, num_holdout)
+    if num_holdout >= num_nodes:
+        raise ValueError("inductive holdout must leave at least one training node")
+
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(holdout_seed)
+    permutation = torch.randperm(num_nodes, generator=generator)
+    holdout_node_ids = permutation[:num_holdout]
+    heldout_mask = torch.zeros(num_nodes, dtype=torch.bool)
+    heldout_mask[holdout_node_ids] = True
+
+    remaining_node_ids = torch.nonzero(~heldout_mask, as_tuple=False).view(-1)
+    node_mapping = torch.full((num_nodes,), -1, dtype=torch.long)
+    node_mapping[remaining_node_ids] = torch.arange(len(remaining_node_ids))
+
+    src, dst = data.edge_index
+    keep_edges = ~heldout_mask[src] & ~heldout_mask[dst]
+    filtered_edges = data.edge_index[:, keep_edges]
+    training_edge_index = node_mapping[filtered_edges]
+
+    # These checks make the exclusion guarantee executable and auditable.
+    assert not heldout_mask[remaining_node_ids].any()
+    assert not heldout_mask[filtered_edges].any()
+    assert (training_edge_index >= 0).all()
+
+    exclusion_metadata: dict[str, object] = {
+        "enabled": num_holdout > 0,
+        "holdout_fraction": holdout_fraction,
+        "holdout_seed": holdout_seed,
+        "holdout_node_ids": holdout_node_ids.tolist(),
+        "holdout_count": num_holdout,
+        "training_node_count": len(remaining_node_ids),
+        "original_edge_count": int(data.edge_index.size(1)),
+        "training_edge_count": int(training_edge_index.size(1)),
+        "heldout_incident_edge_count": int((~keep_edges).sum().item()),
+        "heldout_nodes_in_training_graph": False,
+    }
+    return (
+        data.x[remaining_node_ids],
+        training_edge_index,
+        data.y[remaining_node_ids],
+        data.train_mask[remaining_node_ids],
+        data.val_mask[remaining_node_ids],
+        data.test_mask[remaining_node_ids],
+        exclusion_metadata,
+    )
 
 
 def get_git_sha() -> str:
@@ -63,6 +129,11 @@ def train_tracked(
 ) -> str:
     """Run a fully tracked training experiment.
 
+    When ``inductive.holdout_fraction`` is non-zero, held-out nodes and all
+    incident edges are removed before training.  The compact training graph
+    is recorded in the run metadata so serving can introduce those nodes
+    later with their features and graph context.
+
     Args:
         config_path: Path to the YAML config.
         seed: Random seed.
@@ -79,7 +150,23 @@ def train_tracked(
     dataset = Planetoid(root=cfg.get("dataset", {}).get("root", "./data"), name="Cora")
     data = dataset[0]
 
-    dataset_hash = compute_dataset_hash(data.x, data.edge_index, data.y)
+    inductive_cfg = cfg.get("inductive", {})
+    (
+        train_x,
+        train_edge_index,
+        train_y,
+        train_mask,
+        val_mask,
+        test_mask,
+        exclusion_metadata,
+    ) = prepare_inductive_data(
+        data,
+        holdout_fraction=float(inductive_cfg.get("holdout_fraction", 0.0)),
+        holdout_seed=int(inductive_cfg.get("holdout_seed", seed)),
+    )
+
+    full_dataset_hash = compute_dataset_hash(data.x, data.edge_index, data.y)
+    dataset_hash = compute_dataset_hash(train_x, train_edge_index, train_y)
     git_sha = get_git_sha()
     lib_versions = get_library_versions()
 
@@ -117,15 +204,20 @@ def train_tracked(
             "patience": train_cfg.get("patience", 30),
             "seed": seed,
             "dataset_hash": dataset_hash,
+            "full_dataset_hash": full_dataset_hash,
             "git_sha": git_sha,
+            "inductive_holdout_count": exclusion_metadata["holdout_count"],
+            "inductive_holdout_seed": exclusion_metadata["holdout_seed"],
+            "inductive_training_node_count": exclusion_metadata["training_node_count"],
+            "inductive_training_edge_count": exclusion_metadata["training_edge_count"],
         })
         for lib, ver in lib_versions.items():
             mlflow.log_param(f"lib_{lib}", ver)
 
         # --- Train ---
         result = train_one_run(
-            model, data.x, data.edge_index, data.y,
-            data.train_mask, data.val_mask, data.test_mask,
+            model, train_x, train_edge_index, train_y,
+            train_mask, val_mask, test_mask,
             lr=train_cfg.get("lr", 0.01),
             weight_decay=train_cfg.get("weight_decay", 5e-4),
             epochs=train_cfg.get("epochs", 200),
@@ -173,9 +265,11 @@ def train_tracked(
             metadata={
                 "run_id": run.info.run_id,
                 "dataset_hash": dataset_hash,
+                "full_dataset_hash": full_dataset_hash,
                 "git_sha": git_sha,
                 "seed": seed,
                 "val_macro_f1": result["best_val"]["macro_f1"],
+                "inductive": exclusion_metadata,
             },
             output_dir=str(package_dir),
         )
